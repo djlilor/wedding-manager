@@ -121,6 +121,7 @@
   .spinner { width: 14px; height: 14px; border: 2px solid #e5e5e5; border-top-color: #999; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="app" dir="rtl">
@@ -350,40 +351,69 @@ function monthAbbr(d) {
   return MONTHS_HE[d.getMonth()].slice(0,3);
 }
 
-function startAuth() {
+function startAuth(silent) {
   const errEl = document.getElementById('auth-error');
   errEl.style.display = 'none';
 
   if (typeof google !== 'undefined' && google.accounts) {
-    initTokenClient();
+    initTokenClient(silent);
     return;
   }
 
   const s = document.createElement('script');
   s.src = 'https://accounts.google.com/gsi/client';
-  s.onload = () => initTokenClient();
-  s.onerror = () => showAuthError('לא ניתן לטעון Google Identity Services — בדוק חיבור לאינטרנט');
+  s.onload = () => initTokenClient(silent);
+  s.onerror = () => { if (!silent) showAuthError('לא ניתן לטעון Google Identity Services — בדוק חיבור לאינטרנט'); };
   document.head.appendChild(s);
 }
 
-function initTokenClient() {
+// Auto-login on page load
+window.addEventListener('load', () => {
+  setTimeout(() => startAuth(true), 500);
+});
+
+function initTokenClient(silent) {
   try {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPES,
+      prompt: silent ? 'none' : '',
       callback: (resp) => {
-        if (resp.error) { showAuthError('שגיאת אימות: ' + resp.error); return; }
+        if (resp.error) {
+          if (silent) return; // silent fail — user will click manually
+          showAuthError('שגיאת אימות: ' + resp.error);
+          return;
+        }
         accessToken = resp.access_token;
         show('list');
         setTodayDate();
         loadSheet();
         loadVenues();
+        // Auto-refresh token before it expires (every 45 min)
+        scheduleTokenRefresh();
       }
     });
-    tokenClient.requestAccessToken();
+    tokenClient.requestAccessToken({ prompt: silent ? 'none' : '' });
   } catch(e) {
-    showAuthError('שגיאה: ' + e.message);
+    if (!silent) showAuthError('שגיאה: ' + e.message);
   }
+}
+
+function scheduleTokenRefresh() {
+  setTimeout(() => {
+    if (!tokenClient) return;
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope: SCOPES,
+      prompt: 'none',
+      callback: (resp) => {
+        if (resp.error) return;
+        accessToken = resp.access_token;
+        scheduleTokenRefresh(); // schedule next refresh
+      }
+    });
+    tokenClient.requestAccessToken({ prompt: 'none' });
+  }, 45 * 60 * 1000); // 45 minutes
 }
 
 function showAuthError(msg) {
