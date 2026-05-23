@@ -163,6 +163,15 @@
   body.dark .cal-nav-btn { border-color:#3a3a5a; color:#e6e6f0; background:#23233a; }
   body.dark .cal-event.wedding { background:#2a3a5a; color:#aac0e8; }
   body.dark .cal-event.meeting { background:#1a3a30; color:#6ae8c0; }
+
+  .week-panel-title { font-size:15px; font-weight:600; margin-bottom:10px; }
+  .week-wedding-card { background:white; border:1px solid #cdd3db; border-radius:14px; padding:14px 16px; margin-bottom:10px; }
+  .week-wedding-name { font-size:15px; font-weight:600; margin-bottom:8px; }
+  .week-task { display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; color:#444; }
+  .week-task.done { color:#aaa; text-decoration:line-through; }
+  .week-task-icon { font-size:14px; }
+  body.dark .week-wedding-card { background:#23233a; border-color:#3a3a5a; }
+  body.dark .week-task { color:#aaa; }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -228,7 +237,10 @@
       <button class="filter-chip" onclick="setFilter('babysitter',this)">בייביסיטר</button>
       <button class="filter-chip" onclick="setFilter('noform',this)">טופס חסר</button>
       <button class="filter-chip" onclick="setFilter('nomeet',this)">פגישה חסרה</button>
+      <button class="filter-chip" onclick="setFilter('thisweek',this)">השבוע הקרוב</button>
+      <button class="filter-chip" onclick="setFilter('vinyl',this)">תקליטים</button>
     </div>
+    <div id="week-panel" style="display:none;margin-bottom:16px"></div>
     <div id="wedding-list" class="wedding-list"></div>
   </div>
 
@@ -616,6 +628,12 @@ function renderList() {
   else if (activeFilter === 'babysitter') list = list.filter(w => w.parsedDate >= now && isBabysitterNeeded(w));
   else if (activeFilter === 'noform') list = list.filter(w => w.parsedDate >= now && (!w.musicForm || w.musicForm === '-'));
   else if (activeFilter === 'nomeet') list = list.filter(w => w.parsedDate >= now && !w.musicMeeting);
+  else if (activeFilter === 'vinyl') list = list.filter(w => w.parsedDate >= now && (w.vinyl||'').includes('כן'));
+  else if (activeFilter === 'thisweek') {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const in7 = new Date(today); in7.setDate(in7.getDate()+7);
+    list = list.filter(w => w.parsedDate >= today && w.parsedDate <= in7);
+  }
   if (q) list = list.filter(w =>
     (w.couple+'').toLowerCase().includes(q) ||
     (w.venue+'').toLowerCase().includes(q)
@@ -647,6 +665,16 @@ function renderList() {
       <span class="chevron">›</span>
     </div>`;
   }).join('');
+  // Show/hide week panel
+  const weekPanel = document.getElementById('week-panel');
+  if (weekPanel) {
+    if (activeFilter === 'thisweek') {
+      weekPanel.style.display = 'block';
+      renderWeekPanel(list);
+    } else {
+      weekPanel.style.display = 'none';
+    }
+  }
 }
 
 function openWedding(rowIndex) {
@@ -1166,6 +1194,54 @@ async function sendReminderEmail(w) {
       body: JSON.stringify({ raw: encoded })
     });
   } catch(e) { console.error('Email error:', e); }
+}
+
+
+function renderWeekPanel(weddings) {
+  const panel = document.getElementById('week-panel');
+  if (!weddings.length) {
+    panel.innerHTML = '<div style="text-align:center;color:#888;padding:20px">אין חתונות השבוע 🎉</div>';
+    return;
+  }
+
+  let html = '<div class="week-panel-title">📋 משימות פתוחות לשבוע הקרוב</div>';
+
+  weddings.forEach(w => {
+    const key = w.rowIndex;
+    const wTasks = tasks[key] || [
+      { text: 'לתאם פגישת מוזיקה', done: false },
+      { text: 'לשלוח טופס מוזיקה', done: false },
+      { text: 'בייביסיטר לגבע', done: false },
+      { text: 'לתאם עוזר דיג\'יי', done: false },
+    ];
+
+    // Auto-mark tasks based on sheet data
+    const autoStatus = [
+      w.musicMeeting && w.musicMeeting.trim() !== '',
+      w.musicForm === 'נשלח',
+      false, // babysitter - manual only
+      w.assistant && w.assistant.trim() !== '',
+    ];
+
+    const daysLeft = Math.ceil((w.parsedDate - new Date()) / (1000*60*60*24));
+    const dateStr = formatDateHe ? formatDateHe(w.parsedDate) : w.date;
+
+    let tasksHtml = wTasks.map((t, i) => {
+      const isDone = t.done || autoStatus[i];
+      return `<div class="week-task${isDone?' done':''}">
+        <span class="week-task-icon">${isDone?'✅':'⬜'}</span>
+        ${t.text}
+      </div>`;
+    }).join('');
+
+    html += `<div class="week-wedding-card" onclick="openWedding(${w.rowIndex})" style="cursor:pointer">
+      <div class="week-wedding-name">💍 ${w.couple} <span style="font-size:12px;color:#888;font-weight:400">· ${dateStr} · עוד ${daysLeft} ימים</span></div>
+      <div style="color:#666;font-size:12px;margin-bottom:8px">📍 ${w.venue}</div>
+      ${tasksHtml}
+    </div>`;
+  });
+
+  panel.innerHTML = html;
 }
 
 function goBack() {
