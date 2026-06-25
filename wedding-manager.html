@@ -565,8 +565,8 @@ function parseSheetData(rows) {
       musicForm: row[5] || '',    // F - טופס מוזיקה
       vinyl: row[6] || '',        // G - תקליטים
       assistant: row[7] || '',    // H - עוזר
-      notes: row[8] || '',        // I - הערות
-      babysitter: row[9] || '',   // J - גבע
+      babysitter: row[8] || '',   // I - בייביסיטר לגבע
+      notes: row[9] || '',        // J - הערות
       phone: row[10] || '',       // K - טלפון
       questionnaireLink: row[12] || '', // M - שאלון
     });
@@ -656,8 +656,8 @@ function renderList() {
       const d = w.parsedDate;
       return `<div class="wedding-card-compact" onclick="openWedding(${w.rowIndex})">
         <span class="cc-date">${d.getDate()} ${monthAbbr(d)}</span>
-        <span class="cc-couple">${w.couple}</span>
         <span class="cc-venue">${w.venue}</span>
+        <span class="cc-couple">${w.couple}</span>
       </div>`;
     }).join('');
     const weekPanel = document.getElementById('week-panel');
@@ -999,9 +999,9 @@ async function saveToSheet() {
   const questionnaireLink = document.getElementById('field-questionnaireLink').value.trim();
   const rowNum = w.rowIndex;
   const babysitter = document.getElementById('field-babysitter').value.trim();
-  // E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=הערות, J=גבע, K=טלפון | L=שנה (לא נוגעים בו!) | M=שאלון
+  // E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=בייביסיטר לגבע, J=הערות, K=טלפון | L=שנה (לא נוגעים בו!) | M=שאלון
   const range1 = `${SHEET_NAME}!E${rowNum}:K${rowNum}`;
-  const values1 = [[ musicMeeting, formOn ? 'נשלח' : '', vinylOn ? 'כן' : '', assistant, notes, babysitter, phone ]];
+  const values1 = [[ musicMeeting, formOn ? 'נשלח' : '', vinylOn ? 'כן' : '', assistant, babysitter, notes, phone ]];
   const range2 = `${SHEET_NAME}!M${rowNum}`;
   const values2 = [[ questionnaireLink ]];
   try {
@@ -1477,7 +1477,7 @@ async function saveNewEntry() {
   const babysitter = document.getElementById('new-babysitter').value.trim();
   const notes = document.getElementById('new-notes').value.trim();
 
-  // עמודות: A=תאריך, B=יום, C=מקום, D=זוג, E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=הערות, J=גבע, K=טלפון, L=שנה
+  // עמודות: A=תאריך, B=יום, C=מקום, D=זוג, E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=בייביסיטר לגבע, J=הערות, K=טלפון, L=שנה
   const newRow = [
     dateVal,              // A - תאריך
     day,                  // B - יום
@@ -1487,8 +1487,8 @@ async function saveNewEntry() {
     formOn ? 'נשלח' : '', // F - טופס מוזיקה
     vinylOn ? 'כן' : '',  // G - תקליטים
     assistant,            // H - עוזר
-    notes,                // I - הערות
-    babysitter,           // J - גבע
+    babysitter,           // I - בייביסיטר לגבע
+    notes,                // J - הערות
     '',                   // K - טלפון
     String(d.getFullYear()) // L - שנה
   ];
