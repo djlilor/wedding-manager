@@ -24,6 +24,7 @@
   .btn-primary:hover { background: #333; }
   .btn-secondary { background: transparent; border: 1px solid #ddd; border-radius: 10px; padding: 8px 16px; font-size: 13px; cursor: pointer; color: #111; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
   .btn-secondary:hover { background: #f5f5f5; }
+  .btn-secondary.active { background: #111; color: white; border-color: #111; }
 
   .search-bar { position: relative; margin-bottom: 1rem; }
   .search-bar input { width: 100%; padding: 10px 38px 10px 14px; border: 1px solid #e5e5e5; border-radius: 10px; font-size: 14px; background: white; color: #111; font-family: inherit; }
@@ -35,6 +36,11 @@
   .filter-chip.active { background: #111; color: white; border-color: #111; }
 
   .wedding-list { display: flex; flex-direction: column; gap: 8px; }
+  .wedding-card-compact { background: white; border: 1px solid #e5e5e5; border-radius: 10px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 13px; transition: border-color 0.15s; }
+  .wedding-card-compact:hover { border-color: #bbb; }
+  .wedding-card-compact .cc-date { color: #666; min-width: 70px; flex-shrink: 0; }
+  .wedding-card-compact .cc-couple { font-weight: 600; flex: 1; }
+  .wedding-card-compact .cc-venue { color: #666; }
   .wedding-card { background: white; border: 1px solid #e5e5e5; border-radius: 14px; padding: 14px 16px; cursor: pointer; display: flex; align-items: center; gap: 12px; transition: border-color 0.15s, box-shadow 0.15s; }
   .wedding-card:hover { border-color: #bbb; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
   .date-box { text-align: center; min-width: 48px; background: #f5f5f5; border-radius: 10px; padding: 7px 8px; }
@@ -125,10 +131,12 @@
   body.dark { background: #1a1a2e; color: #e6e6f0; }
   body.dark .auth-card,
   body.dark .wedding-card,
+  body.dark .wedding-card-compact,
   body.dark .stat-card,
   body.dark .field-card,
   body.dark .detail-header-box,
   body.dark .modal-box { background: #23233a; border-color: #3a3a5a; color: #e6e6f0; }
+  body.dark .wedding-card-compact .cc-date, body.dark .wedding-card-compact .cc-venue { color: #8080a8; }
   body.dark .filter-chip { background: #23233a; border-color: #3a3a5a; color: #aaa; }
   body.dark .filter-chip.active { background: #e6e6f0; color: #1a1a2e; border-color: #e6e6f0; }
   body.dark .text-input, body.dark .notes-area { background: #1a1a2e; border-color: #3a3a5a; color: #e6e6f0; }
@@ -206,6 +214,7 @@
         </button>
         <button class="btn-primary" onclick="openNewEntry()">+ חתונה חדשה</button>
         <button class="btn-secondary" onclick="toggleCalView()" id="cal-toggle-btn" title="לוח שנה" style="padding:8px 10px">🗓️</button>
+        <button class="btn-secondary" onclick="toggleCompact()" id="compact-toggle-btn" title="תצוגה קומפקטית" style="padding:8px 10px">📃</button>
         <button class="btn-secondary" onclick="toggleDark()" id="dark-toggle-btn" title="מצב לילה" style="padding:8px 10px">🌙</button>
       </div>
     </div>
@@ -381,6 +390,7 @@ let allWeddings = [];
 let venuesDB = {};
 let currentWedding = null;
 let activeFilter = 'upcoming';
+let compactView = false;
 let tasks = {};
 
 function show(id) {
@@ -433,6 +443,7 @@ function startAuth(silent) {
 // Auto-login on page load
 window.addEventListener('load', () => {
   initDark();
+  initCompact();
   loadTasks();
   setTimeout(() => startAuth(true), 500);
 });
@@ -598,11 +609,11 @@ function renderStats() {
   const now = new Date();
   const upcoming = allWeddings.filter(w => w.parsedDate >= now).length;
   const thisYear = allWeddings.filter(w => w.parsedDate.getFullYear() === now.getFullYear()).length;
-  const baby = allWeddings.filter(w => w.parsedDate >= now && isBabysitterNeeded(w)).length;
+  const baby = allWeddings.filter(w => w.babysitter && w.babysitter.trim()).length;
   document.getElementById('stats-row').innerHTML = `
     <div class="stat-card"><div class="num">${upcoming}</div><div class="lbl">קרובות</div></div>
     <div class="stat-card"><div class="num">${thisYear}</div><div class="lbl">השנה</div></div>
-    <div class="stat-card"><div class="num">${baby}</div><div class="lbl">בייביסיטר</div></div>
+    <div class="stat-card"><div class="num">${baby}</div><div class="lbl">בייביסיטר (סה"כ)</div></div>
   `;
   document.getElementById('list-sub').textContent = `${allWeddings.length} חתונות בסה"כ`;
 }
@@ -636,13 +647,33 @@ function renderList() {
   const container = document.getElementById('wedding-list');
   if (!list.length) {
     container.innerHTML = '<div class="empty-state">🔍<br>לא נמצאו חתונות</div>';
+    const wp = document.getElementById('week-panel');
+    if (wp) wp.style.display = 'none';
+    return;
+  }
+  if (compactView) {
+    container.innerHTML = list.map(w => {
+      const d = w.parsedDate;
+      return `<div class="wedding-card-compact" onclick="openWedding(${w.rowIndex})">
+        <span class="cc-date">${d.getDate()} ${monthAbbr(d)}</span>
+        <span class="cc-couple">${w.couple}</span>
+        <span class="cc-venue">${w.venue}</span>
+      </div>`;
+    }).join('');
+    const weekPanel = document.getElementById('week-panel');
+    if (weekPanel) {
+      if (activeFilter === 'thisweek') { weekPanel.style.display = 'block'; renderWeekPanel(list); }
+      else weekPanel.style.display = 'none';
+    }
     return;
   }
   container.innerHTML = list.map(w => {
     const d = w.parsedDate;
     const now2 = new Date();
     const badges = [];
-    if (isBabysitterNeeded(w)) badges.push('<span class="badge badge-warning">בייביסיטר</span>');
+    const hasBabysitter = !!(w.babysitter && w.babysitter.trim());
+    if (hasBabysitter) badges.push('<span class="badge badge-success">בייביסיטר ✓</span>');
+    else if (isBabysitterNeeded(w)) badges.push('<span class="badge badge-warning">בייביסיטר</span>');
     if (!w.musicForm || w.musicForm === '-') badges.push('<span class="badge badge-neutral">טופס חסר</span>');
     if ((w.vinyl||'').includes('כן')) badges.push('<span class="badge badge-info">תקליטים</span>');
     const daysLeft = Math.ceil((d - now2) / 864e5);
@@ -705,6 +736,7 @@ function renderBanners() {
 
 async function checkCalendar() {
   const w = currentWedding;
+  const hasBabysitter = !!(w.babysitter && w.babysitter.trim());
   const banners = document.getElementById('detail-banners');
   const calDiv = document.createElement('div');
   calDiv.id = 'cal-banner';
@@ -718,9 +750,13 @@ async function checkCalendar() {
     const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
     const data = await resp.json();
     const found = (data.items || []).some(e => (e.summary || '').includes(CAL_EVENT_NAME));
-    calDiv.innerHTML = found
-      ? `<div class="danger-banner">⚠️ "${CAL_EVENT_NAME}" ביום הזה — צריך בייביסיטר לגבע!</div>`
-      : `<div class="success-banner">✓ אין "${CAL_EVENT_NAME}" ביום החתונה — גבע מסודר</div>`;
+    if (hasBabysitter) {
+      calDiv.innerHTML = `<div class="success-banner">✓ בייביסיטר לגבע מסודר: ${w.babysitter}</div>`;
+    } else {
+      calDiv.innerHTML = found
+        ? `<div class="danger-banner">⚠️ "${CAL_EVENT_NAME}" ביום הזה — צריך בייביסיטר לגבע!</div>`
+        : `<div class="success-banner">✓ אין "${CAL_EVENT_NAME}" ביום החתונה — גבע מסודר</div>`;
+    }
   } catch(e) {
     calDiv.innerHTML = '';
   }
@@ -961,22 +997,34 @@ async function saveToSheet() {
   const notes = document.getElementById('field-notes').value;
   const phone = document.getElementById('field-phone').value.trim();
   const questionnaireLink = document.getElementById('field-questionnaireLink').value.trim();
-  const rowNum = w.rowIndex + 1;
+  const rowNum = w.rowIndex;
   const babysitter = document.getElementById('field-babysitter').value.trim();
-  // E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=הערות, J=גבע, K=טלפון, M=שאלון
-  const range = `${SHEET_NAME}!E${rowNum}:M${rowNum}`;
-  const values = [[ musicMeeting, formOn ? 'נשלח' : '', vinylOn ? 'כן' : '', assistant, notes, babysitter, phone, '', questionnaireLink ]];
+  // E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=הערות, J=גבע, K=טלפון | L=שנה (לא נוגעים בו!) | M=שאלון
+  const range1 = `${SHEET_NAME}!E${rowNum}:K${rowNum}`;
+  const values1 = [[ musicMeeting, formOn ? 'נשלח' : '', vinylOn ? 'כן' : '', assistant, notes, babysitter, phone ]];
+  const range2 = `${SHEET_NAME}!M${rowNum}`;
+  const values2 = [[ questionnaireLink ]];
   try {
     const resp = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range1)}?valueInputOption=RAW`,
       {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ range, majorDimension: 'ROWS', values })
+        body: JSON.stringify({ range: range1, majorDimension: 'ROWS', values: values1 })
       }
     );
     const data = await resp.json();
     if (data.error) { syncEl.className='sync-status error'; syncEl.textContent='שגיאה: '+data.error.message; return; }
+    const resp2 = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range2)}?valueInputOption=RAW`,
+      {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ range: range2, majorDimension: 'ROWS', values: values2 })
+      }
+    );
+    const data2 = await resp2.json();
+    if (data2.error) { syncEl.className='sync-status error'; syncEl.textContent='שגיאה: '+data2.error.message; return; }
     w.musicMeeting = musicMeeting;
     w.musicForm = formOn ? 'נשלח' : '';
     w.vinyl = vinylOn ? 'כן' : '';
@@ -1007,6 +1055,20 @@ function initDark() {
     const btn = document.getElementById('dark-toggle-btn');
     if (btn) btn.textContent = '☀️';
   }
+}
+
+// ── Compact View ──
+function toggleCompact() {
+  compactView = !compactView;
+  localStorage.setItem('wm-compact', compactView ? '1' : '');
+  const btn = document.getElementById('compact-toggle-btn');
+  if (btn) btn.classList.toggle('active', compactView);
+  renderList();
+}
+function initCompact() {
+  compactView = !!localStorage.getItem('wm-compact');
+  const btn = document.getElementById('compact-toggle-btn');
+  if (btn && compactView) btn.classList.add('active');
 }
 
 // ── Calendar View ──
@@ -1273,6 +1335,8 @@ async function confirmEdit() {
   const rowNum = currentWedding.rowIndex;
   const range = `${SHEET_NAME}!A${rowNum}:D${rowNum}`;
   const values = [[date, day, venue, couple]];
+  const yearRange = `${SHEET_NAME}!L${rowNum}`;
+  const yearValues = [[ String(d.getFullYear()) ]];
   try {
     const resp = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
@@ -1281,6 +1345,11 @@ async function confirmEdit() {
     );
     const data = await resp.json();
     if (data.error) { alert('שגיאה: ' + data.error.message); return; }
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(yearRange)}?valueInputOption=RAW`,
+      { method: 'PUT', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ range: yearRange, majorDimension: 'ROWS', values: yearValues }) }
+    );
     currentWedding.couple = couple;
     currentWedding.venue = venue;
     currentWedding.date = date;
@@ -1303,7 +1372,7 @@ function closeDeleteModal() {
 }
 
 async function confirmDelete() {
-  const rowNum = currentWedding.rowIndex + 1;
+  const rowNum = currentWedding.rowIndex;
   try {
     const metaResp = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`,
