@@ -208,10 +208,6 @@
       </div>
       <div style="margin-right:auto;display:flex;align-items:center;gap:8px">
         <div class="sync-status" id="sync-status"></div>
-        <button class="btn-secondary" onclick="loadSheet()">
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          רענן
-        </button>
         <button class="btn-primary" onclick="openNewEntry()">+ חתונה חדשה</button>
         <button class="btn-secondary" onclick="toggleCalView()" id="cal-toggle-btn" title="לוח שנה" style="padding:8px 10px">🗓️</button>
         <button class="btn-secondary" onclick="toggleCompact()" id="compact-toggle-btn" title="תצוגה קומפקטית" style="padding:8px 10px">📃</button>
@@ -931,6 +927,12 @@ function showFilePicker(files) {
   setTimeout(() => searchInput.focus(), 100);
 }
 
+function taskKey(w) {
+  // Stable key so checklist data stays attached to the right wedding
+  // even if rows are deleted/inserted in the sheet (rowIndex shifts).
+  return (w.couple || '') + '|' + (w.date || '') + '|' + (w.venue || '');
+}
+
 function saveTasks() {
   localStorage.setItem('wm-tasks', JSON.stringify(tasks));
 }
@@ -943,7 +945,7 @@ function loadTasks() {
 }
 
 function renderChecklist() {
-  const key = currentWedding.rowIndex;
+  const key = taskKey(currentWedding);
   if (!tasks[key]) {
     tasks[key] = [
       { text: 'לתאם פגישת מוזיקה', done: false },
@@ -957,7 +959,7 @@ function renderChecklist() {
 }
 
 function refreshChecklist() {
-  const key = currentWedding.rowIndex;
+  const key = taskKey(currentWedding);
   const list = tasks[key] || [];
   document.getElementById('checklist').innerHTML = list.map((t,i) =>
     `<label class="check-item ${t.done?'done':''}">
@@ -968,7 +970,7 @@ function refreshChecklist() {
 }
 
 function toggleTask(i, cb) {
-  tasks[currentWedding.rowIndex][i].done = cb.checked;
+  tasks[taskKey(currentWedding)][i].done = cb.checked;
   saveTasks();
   refreshChecklist();
 }
@@ -977,7 +979,7 @@ function addTask() {
   const inp = document.getElementById('new-task-input');
   const val = inp.value.trim();
   if (!val) return;
-  const key = currentWedding.rowIndex;
+  const key = taskKey(currentWedding);
   if (!tasks[key]) tasks[key] = [];
   tasks[key].push({ text: val, done: false });
   inp.value = '';
@@ -1270,7 +1272,7 @@ function renderWeekPanel(weddings) {
   let html = '<div class="week-panel-title">📋 משימות פתוחות לשבוע הקרוב</div>';
 
   weddings.forEach(w => {
-    const key = w.rowIndex;
+    const key = taskKey(w);
     const wTasks = tasks[key] || [
       { text: 'לתאם פגישת מוזיקה', done: false },
       { text: 'לשלוח טופס מוזיקה', done: false },
