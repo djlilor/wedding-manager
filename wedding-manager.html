@@ -574,28 +574,62 @@ function parseSheetData(rows) {
 
 let calendarCache = {};
 
+// ── Helpers ──
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function todayStart() { const t = new Date(); t.setHours(0,0,0,0); return t; }
+function isUpcoming(w) { return w.parsedDate >= todayStart(); }
+function toLocalISODate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function waNumber(phone) {
+  let n = String(phone || '').replace(/\D/g, '');
+  if (n.startsWith('972')) return n;
+  return '972' + n.replace(/^0/, '');
+}
+const EMPTY_VALUES =['', '-', '—', 'לא', 'אין'];
+const NO_NEED_VALUES = ['לא צריך', 'לא צריך בייביסיטר', 'אין צורך', 'לא רלוונטי'];
+function hasMeeting(w) {
+  return !EMPTY_VALUES.includes((w.musicMeeting || '').trim());
+}
+// 'named' = שם רשום (צהוב) | 'needed' = צריך לקבוע (אדום) | 'free' = אין גבע (ירוק) | 'unknown' = עוד לא נבדק
+function babysitterStatus(w) {
+  const b = (w.babysitter || '').trim();
+  if (NO_NEED_VALUES.includes(b)) return 'free';
+  if (!EMPTY_VALUES.includes(b)) return 'named';
+  const c = calendarCache[w.parsedDate.toDateString()];
+  if (c === true) return 'needed';
+  if (c === false) return 'free';
+  return 'unknown';
+}
+
 function isBabysitterNeeded(w) {
   const dateKey = w.parsedDate.toDateString();
   return calendarCache[dateKey] === true;
 }
 
+async function fetchGevaOnDate(d) {
+  const tMin = new Date(d); tMin.setHours(0,0,0,0);
+  const tMax = new Date(d); tMax.setHours(23,59,59,999);
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${tMin.toISOString()}&timeMax=${tMax.toISOString()}&q=${encodeURIComponent(CAL_EVENT_NAME)}&singleEvents=true`;
+  const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message); // לא מסמנים "ירוק" כשהבדיקה נכשלה
+  return (data.items || []).some(e => (e.summary || '').includes(CAL_EVENT_NAME));
+}
+
 async function checkAllCalendars() {
-  const now = new Date();
-  const upcoming = allWeddings.filter(w => w.parsedDate >= now);
-  for (const w of upcoming) {
-    const dateKey = w.parsedDate.toDateString();
-    if (calendarCache[dateKey] !== undefined) continue;
-    try {
-      const d = w.parsedDate;
-      const tMin = new Date(d); tMin.setHours(0,0,0,0);
-      const tMax = new Date(d); tMax.setHours(23,59,59,999);
-      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${tMin.toISOString()}&timeMax=${tMax.toISOString()}&q=${encodeURIComponent(CAL_EVENT_NAME)}&singleEvents=true`;
-      const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
-      const data = await resp.json();
-      calendarCache[dateKey] = (data.items || []).some(e => (e.summary || '').includes(CAL_EVENT_NAME));
-    } catch(e) {
-      calendarCache[dateKey] = false;
-    }
+  const pending = allWeddings.filter(w => isUpcoming(w) && calendarCache[w.parsedDate.toDateString()] === undefined);
+  const BATCH = 8;
+  for (let i = 0; i < pending.length; i += BATCH) {
+    await Promise.all(pending.slice(i, i + BATCH).map(async w => {
+      try { calendarCache[w.parsedDate.toDateString()] = await fetchGevaOnDate(w.parsedDate); }
+      catch(e) { /* נשאר undefined — יוצג כ"לא נבדק" */ }
+    }));
+    renderList();
   }
   renderStats();
   renderList();
@@ -603,9 +637,9 @@ async function checkAllCalendars() {
 
 function renderStats() {
   const now = new Date();
-  const upcoming = allWeddings.filter(w => w.parsedDate >= now).length;
+  const upcoming = allWeddings.filter(isUpcoming).length;
   const thisYear = allWeddings.filter(w => w.parsedDate.getFullYear() === now.getFullYear()).length;
-  const baby = allWeddings.filter(w => w.babysitter && w.babysitter.trim()).length;
+  const baby = allWeddings.filter(w => babysitterStatus(w) === 'named').length;
   document.getElementById('stats-row').innerHTML = `
     <div class="stat-card"><div class="num">${upcoming}</div><div class="lbl">קרובות</div></div>
     <div class="stat-card"><div class="num">${thisYear}</div><div class="lbl">השנה</div></div>
@@ -622,15 +656,14 @@ function setFilter(f, el) {
 }
 
 function renderList() {
-  const now = new Date();
   const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
   let list = [...allWeddings];
-  if (activeFilter === 'upcoming') list = list.filter(w => w.parsedDate >= now);
-  else if (activeFilter === 'archive') list = list.filter(w => w.parsedDate < now).reverse();
-  else if (activeFilter === 'babysitter') list = list.filter(w => w.parsedDate >= now && isBabysitterNeeded(w));
-  else if (activeFilter === 'noform') list = list.filter(w => w.parsedDate >= now && (!w.musicForm || w.musicForm === '-'));
-  else if (activeFilter === 'nomeet') list = list.filter(w => w.parsedDate >= now && !w.musicMeeting);
-  else if (activeFilter === 'vinyl') list = list.filter(w => w.parsedDate >= now && (w.vinyl||'').includes('כן'));
+  if (activeFilter === 'upcoming') list = list.filter(isUpcoming);
+  else if (activeFilter === 'archive') list = list.filter(w => !isUpcoming(w)).reverse();
+  else if (activeFilter === 'babysitter') list = list.filter(w => isUpcoming(w) && isBabysitterNeeded(w));
+  else if (activeFilter === 'noform') list = list.filter(w => isUpcoming(w) && (!w.musicForm || w.musicForm === '-'));
+  else if (activeFilter === 'nomeet') list = list.filter(w => isUpcoming(w) && !hasMeeting(w));
+  else if (activeFilter === 'vinyl') list = list.filter(w => isUpcoming(w) && (w.vinyl||'').includes('כן'));
   else if (activeFilter === 'thisweek') {
     const today = new Date(); today.setHours(0,0,0,0);
     const in7 = new Date(today); in7.setDate(in7.getDate()+7);
@@ -652,8 +685,8 @@ function renderList() {
       const d = w.parsedDate;
       return `<div class="wedding-card-compact" onclick="openWedding(${w.rowIndex})">
         <span class="cc-date">${d.getDate()} ${monthAbbr(d)}</span>
-        <span class="cc-venue">${w.venue}</span>
-        <span class="cc-couple">${w.couple}</span>
+        <span class="cc-venue">${esc(w.venue)}</span>
+        <span class="cc-couple">${esc(w.couple)}</span>
       </div>`;
     }).join('');
     const weekPanel = document.getElementById('week-panel');
@@ -667,21 +700,28 @@ function renderList() {
     const d = w.parsedDate;
     const now2 = new Date();
     const badges = [];
-    const hasBabysitter = !!(w.babysitter && w.babysitter.trim());
-    if (hasBabysitter) badges.push('<span class="badge badge-success">בייביסיטר ✓</span>');
-    else if (isBabysitterNeeded(w)) badges.push('<span class="badge badge-warning">בייביסיטר</span>');
-    if (!w.musicForm || w.musicForm === '-') badges.push('<span class="badge badge-neutral">טופס חסר</span>');
-    if ((w.vinyl||'').includes('כן')) badges.push('<span class="badge badge-info">תקליטים</span>');
-    const daysLeft = Math.ceil((d - now2) / 864e5);
-    if (daysLeft >= 0 && daysLeft <= 30) badges.push(`<span class="badge badge-danger">עוד ${daysLeft} ימים</span>`);
+    const upcoming = isUpcoming(w);
+    // בייביסיטר: אדום = צריך לקבוע | ירוק = אין גבע בתאריך | צהוב = רשום שם
+    const bs = babysitterStatus(w);
+    if (bs === 'named') badges.push(`<span class="badge badge-warning">👶 בייביסיטר: ${esc(w.babysitter.trim())}</span>`);
+    else if (bs === 'needed') badges.push('<span class="badge badge-danger">👶 בייביסיטר — צריך לקבוע</span>');
+    else if (bs === 'free' && upcoming) badges.push('<span class="badge badge-success">👶 בייביסיטר ✓</span>');
+    else if (bs === 'unknown' && upcoming) badges.push('<span class="badge badge-neutral">👶 בודק יומן...</span>');
+    // פגישת מוזיקה: אדום = צריך לקבוע | ירוק = נקבעה
+    if (hasMeeting(w)) badges.push('<span class="badge badge-success">🎵 פגישת מוזיקה ✓</span>');
+    else if (upcoming) badges.push('<span class="badge badge-danger">🎵 פגישת מוזיקה — צריך לקבוע</span>');
+    // עמדת תקליטים: רק אם יש
+    if ((w.vinyl||'').includes('כן')) badges.push('<span class="badge badge-info">💿 עמדת תקליטים</span>');
+    const daysLeft = Math.ceil((d - todayStart()) / 864e5);
+    if (daysLeft >= 0 && daysLeft <= 30) badges.push(`<span class="badge badge-neutral">${daysLeft === 0 ? 'היום!' : 'עוד ' + daysLeft + ' ימים'}</span>`);
     return `<div class="wedding-card" onclick="openWedding(${w.rowIndex})">
       <div class="date-box">
         <div class="day-num">${d.getDate()}</div>
         <div class="month">${monthAbbr(d)}</div>
       </div>
       <div class="card-info">
-        <div class="couple-name">${w.couple}</div>
-        <div class="venue-day">${w.venue} · ${w.day}</div>
+        <div class="couple-name">${esc(w.couple)}</div>
+        <div class="venue-day">${esc(w.venue)} · ${esc(w.day)}</div>
         ${badges.length ? '<div class="badges">'+badges.join('')+'</div>' : ''}
       </div>
       <span class="chevron">›</span>
@@ -739,22 +779,17 @@ async function checkCalendar() {
   calDiv.innerHTML = `<div class="cal-check"><span class="spinner"></span> בודק יומן Google...</div>`;
   banners.appendChild(calDiv);
   try {
-    const d = w.parsedDate;
-    const tMin = new Date(d); tMin.setHours(0,0,0,0);
-    const tMax = new Date(d); tMax.setHours(23,59,59,999);
-    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${tMin.toISOString()}&timeMax=${tMax.toISOString()}&q=${encodeURIComponent(CAL_EVENT_NAME)}&singleEvents=true`;
-    const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
-    const data = await resp.json();
-    const found = (data.items || []).some(e => (e.summary || '').includes(CAL_EVENT_NAME));
+    const found = await fetchGevaOnDate(w.parsedDate);
+    calendarCache[w.parsedDate.toDateString()] = found;
     if (hasBabysitter) {
-      calDiv.innerHTML = `<div class="success-banner">✓ בייביסיטר לגבע מסודר: ${w.babysitter}</div>`;
+      calDiv.innerHTML = `<div class="success-banner">✓ בייביסיטר לגבע מסודר: ${esc(w.babysitter)}</div>`;
     } else {
       calDiv.innerHTML = found
         ? `<div class="danger-banner">⚠️ "${CAL_EVENT_NAME}" ביום הזה — צריך בייביסיטר לגבע!</div>`
         : `<div class="success-banner">✓ אין "${CAL_EVENT_NAME}" ביום החתונה — גבע מסודר</div>`;
     }
   } catch(e) {
-    calDiv.innerHTML = '';
+    calDiv.innerHTML = `<div class="reminder-banner">⚠️ לא הצלחתי לבדוק את היומן — רענן את הדף</div>`;
   }
 }
 
@@ -767,23 +802,23 @@ function renderFields() {
   let venueBadge = '<div style="font-size:12px;color:#999;margin-top:6px">עמדה: לא ידוע</div>';
   if (vs) {
     const hasBooth = vs.includes('יש');
-    venueBadge = `<div style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;padding:4px 10px;border-radius:99px;background:${hasBooth?'#D1FAE5':'#FEE2E2'};color:${hasBooth?'#065F46':'#991B1B'}">${hasBooth?'✓':'⚠️'} עמדה: ${vs}</div>`;
+    venueBadge = `<div style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;padding:4px 10px;border-radius:99px;background:${hasBooth?'#D1FAE5':'#FEE2E2'};color:${hasBooth?'#065F46':'#991B1B'}">${hasBooth?'✓':'⚠️'} עמדה: ${esc(vs)}</div>`;
   }
 
   document.getElementById('fields-grid').innerHTML = `
     <div class="field-card">
       <div class="field-label">📅 תאריך ויום</div>
-      <div style="font-size:15px;font-weight:500">${formatDateHe(w.parsedDate)} · ${w.day}</div>
+      <div style="font-size:15px;font-weight:500">${formatDateHe(w.parsedDate)} · ${esc(w.day)}</div>
     </div>
     <div class="field-card">
       <div class="field-label">📍 מקום</div>
-      <div style="font-size:15px;font-weight:500">${w.venue}</div>
+      <div style="font-size:15px;font-weight:500">${esc(w.venue)}</div>
       ${venueBadge}
     </div>
     <div class="field-card">
       <div class="field-label">🎵 פגישת מוזיקה</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <input class="text-input" id="field-musicMeeting" value="${w.musicMeeting}" placeholder="תאריך / סטטוס הפגישה..." dir="rtl" style="flex:1"/>
+        <input class="text-input" id="field-musicMeeting" value="${esc(w.musicMeeting)}" placeholder="תאריך / סטטוס הפגישה..." dir="rtl" style="flex:1"/>
         <button onclick="openMeetingModal()" style="background:#0e7a5e;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap">📅 קבע</button>
       </div>
     </div>
@@ -791,7 +826,7 @@ function renderFields() {
       <div class="toggle-row">
         <div>
           <div class="field-label" style="margin-bottom:2px">📋 טופס מוזיקה נשלח</div>
-          <div style="font-size:12px;color:#999">${w.musicForm || 'לא נשלח'}</div>
+          <div style="font-size:12px;color:#999">${esc(w.musicForm) || 'לא נשלח'}</div>
         </div>
         <button class="toggle ${formOn?'on':'off'}" id="toggle-musicForm" onclick="this.classList.toggle('on');this.classList.toggle('off')" aria-label="טופס מוזיקה"></button>
       </div>
@@ -804,37 +839,36 @@ function renderFields() {
     </div>
     <div class="field-card">
       <div class="field-label">🎧 עוזר DJ</div>
-      <input class="text-input" id="field-assistant" value="${w.assistant}" placeholder="שם העוזר או ללא..." dir="rtl"/>
+      <input class="text-input" id="field-assistant" value="${esc(w.assistant)}" placeholder="שם העוזר או ללא..." dir="rtl"/>
     </div>
     <div class="field-card">
       <div class="field-label">👶 בייביסיטר לגבע</div>
-      <input class="text-input" id="field-babysitter" value="${w.babysitter}" placeholder="פרטי בייביסיטר..." dir="rtl"/>
+      <input class="text-input" id="field-babysitter" value="${esc(w.babysitter)}" placeholder="פרטי בייביסיטר..." dir="rtl"/>
     </div>
     <div class="field-card">
       <div class="field-label">📝 הערות</div>
-      <textarea class="notes-area" id="field-notes" dir="rtl">${w.notes}</textarea>
+      <textarea class="notes-area" id="field-notes" dir="rtl">${esc(w.notes)}</textarea>
     </div>
     <div class="field-card">
       <div class="field-label">📱 טלפון הזוג</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <input class="text-input" id="field-phone" value="${w.phone}" placeholder="0501234567" dir="ltr" style="flex:1"/>
-        ${w.phone ? `<a href="https://wa.me/972${w.phone.replace(/^0/,'').replace(/\D/g,'')}" target="_blank" style="background:#25D366;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:500;text-decoration:none;white-space:nowrap">💬 WhatsApp</a>` : ''}
+        <input class="text-input" id="field-phone" value="${esc(w.phone)}" placeholder="0501234567" dir="ltr" style="flex:1"/>
+        ${w.phone ? `<a href="https://wa.me/${waNumber(w.phone)}" target="_blank" style="background:#25D366;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:500;text-decoration:none;white-space:nowrap">💬 WhatsApp</a>` : ''}
       </div>
     </div>
     <div class="field-card">
       <div class="field-label">🔗 לינק לשאלון</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <input class="text-input" id="field-questionnaireLink" value="${w.questionnaireLink||''}" placeholder="הדבק כתובת אתר..." dir="ltr" style="flex:1"/>
-        <button onclick="pickQuestionnaire()" style="background:#185FA5;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap">🔍 חפש</button>
+        <input class="text-input" id="field-questionnaireLink" value="${esc(w.questionnaireLink)}" placeholder="הדבק כתובת אתר..." dir="ltr" style="flex:1"/>
+        <button onclick="pickQuestionnaire(this)" style="background:#185FA5;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap">🔍 חפש</button>
       </div>
-      ${w.questionnaireLink ? `<a id="questionnaire-open-link" href="${w.questionnaireLink}" target="_blank" style="display:inline-block;margin-top:8px;font-size:13px;color:#185FA5">פתח שאלון ↗</a>` : ''}
+      ${w.questionnaireLink ? `<a id="questionnaire-open-link" href="${esc(w.questionnaireLink)}" target="_blank" style="display:inline-block;margin-top:8px;font-size:13px;color:#185FA5">פתח שאלון ↗</a>` : ''}
     </div>
   `;
 }
 
 
-async function pickQuestionnaire() {
-  const btn = event.target;
+async function pickQuestionnaire(btn) {
   btn.textContent = '⏳ טוען...';
   btn.disabled = true;
   try {
@@ -964,7 +998,7 @@ function refreshChecklist() {
   document.getElementById('checklist').innerHTML = list.map((t,i) =>
     `<label class="check-item ${t.done?'done':''}">
       <input type="checkbox" ${t.done?'checked':''} onchange="toggleTask(${i},this)"/>
-      ${t.text}
+      ${esc(t.text)}
     </label>`
   ).join('');
 }
@@ -1003,7 +1037,12 @@ async function saveToSheet() {
   const babysitter = document.getElementById('field-babysitter').value.trim();
   // E=פ.מוזיקה, F=טופס מוזיקה, G=תקליטים, H=עוזר, I=בייביסיטר לגבע, J=הערות, K=טלפון | L=שנה (לא נוגעים בו!) | M=שאלון
   const range1 = `${SHEET_NAME}!E${rowNum}:K${rowNum}`;
-  const values1 = [[ musicMeeting, formOn ? 'נשלח' : '', vinylOn ? 'כן' : '', assistant, babysitter, notes, phone ]];
+  // שומרים את הערך המקורי אם הטוגל לא שונה (למשל "כן + עמדה" / תאריך שליחה) — לא דורסים ל"כן"/"נשלח"
+  const origFormOn = !!(w.musicForm && w.musicForm !== '-');
+  const origVinylOn = (w.vinyl || '').includes('כן');
+  const musicFormVal = formOn ? (origFormOn ? w.musicForm : 'נשלח') : '';
+  const vinylVal = vinylOn ? (origVinylOn ? w.vinyl : 'כן') : '';
+  const values1 = [[ musicMeeting, musicFormVal, vinylVal, assistant, babysitter, notes, phone ]];
   const range2 = `${SHEET_NAME}!M${rowNum}`;
   const values2 = [[ questionnaireLink ]];
   try {
@@ -1028,8 +1067,8 @@ async function saveToSheet() {
     const data2 = await resp2.json();
     if (data2.error) { syncEl.className='sync-status error'; syncEl.textContent='שגיאה: '+data2.error.message; return; }
     w.musicMeeting = musicMeeting;
-    w.musicForm = formOn ? 'נשלח' : '';
-    w.vinyl = vinylOn ? 'כן' : '';
+    w.musicForm = musicFormVal;
+    w.vinyl = vinylVal;
     w.assistant = assistant;
     w.babysitter = babysitter;
     w.notes = notes;
@@ -1130,10 +1169,10 @@ function renderCalendar() {
 
     let eventsHtml = '';
     dayWeddings.forEach(w => {
-      eventsHtml += `<div class="cal-event wedding" onclick="openWedding(${w.rowIndex})" title="${w.couple}">💍 ${w.couple}</div>`;
+      eventsHtml += `<div class="cal-event wedding" onclick="openWedding(${w.rowIndex})" title="${esc(w.couple)}">💍 ${esc(w.couple)}</div>`;
     });
     dayMeetings.forEach(w => {
-      eventsHtml += `<div class="cal-event meeting" onclick="openWedding(${w.rowIndex})" title="פגישה: ${w.couple}">🎵 ${w.couple}</div>`;
+      eventsHtml += `<div class="cal-event meeting" onclick="openWedding(${w.rowIndex})" title="פגישה: ${esc(w.couple)}">🎵 ${esc(w.couple)}</div>`;
     });
 
     cells += `<div class="cal-grid-day${isToday?' today':''}">
@@ -1153,7 +1192,7 @@ function openMeetingModal() {
   suggested.setDate(suggested.getDate() - 42);
   const today = new Date();
   const useDate = suggested > today ? suggested : today;
-  document.getElementById('meeting-date').value = useDate.toISOString().split('T')[0];
+  document.getElementById('meeting-date').value = toLocalISODate(useDate);
   document.getElementById('meeting-status').textContent = '';
   document.getElementById('modal-meeting').style.display = 'flex';
 }
@@ -1201,7 +1240,9 @@ async function confirmMeeting() {
     document.getElementById('field-musicMeeting').value = fieldVal;
 
     statusEl.style.color = '#0e7a5e';
-    statusEl.textContent = '✓ נוצר ביומן!';
+    statusEl.textContent = '✓ נוצר ביומן! שומר בשיט...';
+    await saveToSheet(); // שומר מיד — כדי שהפגישה לא תלך לאיבוד אם שוכחים ללחוץ "שמור"
+    statusEl.textContent = '✓ נוצר ביומן ונשמר בשיט!';
     setTimeout(() => closeMeetingModal(), 1500);
   } catch(e) {
     statusEl.textContent = '❌ שגיאת רשת';
@@ -1295,13 +1336,13 @@ function renderWeekPanel(weddings) {
       const isDone = t.done || autoStatus[i];
       return `<div class="week-task${isDone?' done':''}">
         <span class="week-task-icon">${isDone?'✅':'⬜'}</span>
-        ${t.text}
+        ${esc(t.text)}
       </div>`;
     }).join('');
 
     html += `<div class="week-wedding-card" onclick="openWedding(${w.rowIndex})" style="cursor:pointer">
-      <div class="week-wedding-name">💍 ${w.couple} <span style="font-size:12px;color:#888;font-weight:400">· ${dateStr} · עוד ${daysLeft} ימים</span></div>
-      <div style="color:#666;font-size:12px;margin-bottom:8px">📍 ${w.venue}</div>
+      <div class="week-wedding-name">💍 ${esc(w.couple)} <span style="font-size:12px;color:#888;font-weight:400">· ${dateStr} · עוד ${daysLeft} ימים</span></div>
+      <div style="color:#666;font-size:12px;margin-bottom:8px">📍 ${esc(w.venue)}</div>
       ${tasksHtml}
     </div>`;
   });
@@ -1311,6 +1352,7 @@ function renderWeekPanel(weddings) {
 
 function goBack() {
   show('list');
+  renderStats();
   renderList();
   window.scrollTo(0,0);
 }
@@ -1352,15 +1394,25 @@ async function confirmEdit() {
       { method: 'PUT', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
         body: JSON.stringify({ range: yearRange, majorDimension: 'ROWS', values: yearValues }) }
     );
+    // מעבירים את המשימות למפתח החדש (המפתח בנוי מזוג|תאריך|מקום)
+    const oldKey = taskKey(currentWedding);
     currentWedding.couple = couple;
     currentWedding.venue = venue;
     currentWedding.date = date;
     currentWedding.parsedDate = d;
     currentWedding.day = day;
+    const newKey = taskKey(currentWedding);
+    if (oldKey !== newKey && tasks[oldKey]) { tasks[newKey] = tasks[oldKey]; delete tasks[oldKey]; saveTasks(); }
+    allWeddings.sort((a,b) => a.parsedDate - b.parsedDate);
     document.getElementById('detail-title').textContent = couple;
     document.getElementById('detail-subtitle').textContent = formatDateHe(d) + ' · ' + venue;
     closeEditModal();
     renderBanners();
+    // מעדכנים רק את כרטיסי התאריך והמקום — בלי לאבד שינויים שעוד לא נשמרו בשאר השדות
+    const cards = document.querySelectorAll('#fields-grid .field-card');
+    if (cards[0]) cards[0].children[1].textContent = formatDateHe(d) + ' · ' + day;
+    if (cards[1]) cards[1].children[1].textContent = venue;
+    checkCalendar();
   } catch(e) { alert('שגיאת רשת'); }
 }
 
