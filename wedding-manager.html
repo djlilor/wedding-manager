@@ -591,6 +591,7 @@ function waNumber(phone) {
   return '972' + n.replace(/^0/, '');
 }
 const EMPTY_VALUES =['', '-', '—', 'לא', 'אין'];
+const NO_ASSISTANT_VALUES = ['ללא', 'ללא עוזר', 'בלי', 'בלי עוזר', 'לא צריך'];
 const NO_NEED_VALUES = ['לא צריך', 'לא צריך בייביסיטר', 'אין צורך', 'לא רלוונטי'];
 function hasMeeting(w) {
   return !EMPTY_VALUES.includes((w.musicMeeting || '').trim());
@@ -710,6 +711,11 @@ function renderList() {
     // פגישת מוזיקה: אדום = צריך לקבוע | ירוק = נקבעה
     if (hasMeeting(w)) badges.push('<span class="badge badge-success">🎵 פגישת מוזיקה ✓</span>');
     else if (upcoming) badges.push('<span class="badge badge-danger">🎵 פגישת מוזיקה — צריך לקבוע</span>');
+    // עוזר DJ: ירוק עם שם | אדום = לא נקבע | "ללא" = אפור
+    const asst = (w.assistant || '').trim();
+    if (NO_ASSISTANT_VALUES.includes(asst)) { if (upcoming) badges.push('<span class="badge badge-neutral">🎧 ללא עוזר</span>'); }
+    else if (!EMPTY_VALUES.includes(asst)) badges.push(`<span class="badge badge-success">🎧 עוזר: ${esc(asst)}</span>`);
+    else if (upcoming) badges.push('<span class="badge badge-danger">🎧 עוזר — צריך לקבוע</span>');
     // עמדת תקליטים: רק אם יש
     if ((w.vinyl||'').includes('כן')) badges.push('<span class="badge badge-info">💿 עמדת תקליטים</span>');
     const daysLeft = Math.ceil((d - todayStart()) / 864e5);
